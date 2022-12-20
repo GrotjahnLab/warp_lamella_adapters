@@ -6,9 +6,11 @@ import shutil
 import starfile
 import glob
 
-
+print("hi")
 def read_mdoc(mdocname):
     mdoc_header = ["Zvalue","MinMaxMean","TiltAngle","StagePosition","StageZ","Magnification","Intensity","ExposureDose","DoseRate","PixelSpacing","SpotSize","Defocus","ImageShift","RotationAngle","ExposureTime","Binning","CameraIndex","DividedBy2","OperatingMode","MagIndex","LowDoseConSet","CountsPerElectron","TargetDefocus","PriorRecordDose","SubFramePath","NumSubFrames","FrameDosesAndNumber","DateTime","NavigatorLabel","FilterSlitAndLoss"]
+    #mdoc_type = ["string","string","float","float","float","float","float","float","float","float","string","float","float","float","float","string","string","string","string","string","float","float","float","float","string","int","string","string","string","string"]
+    
     mdoc_df = pd.DataFrame(data=None, index=None, columns=mdoc_header, dtype=None, copy=None)
     ind = 0
     with open(mdocname) as fh:
@@ -24,10 +26,14 @@ def read_mdoc(mdocname):
                     continue
             else:
                 mdoc_df.at[ind, entry[0]] = entry[1][0:-1]
-                
+    
+    mdoc_df[['TiltAngle']] = mdoc_df[['TiltAngle']].apply(pd.to_numeric) 
+    mdoc_df = mdoc_df.sort_values(by=['TiltAngle'])
+    mdoc_df = mdoc_df.reset_index()
+    mdoc_df['Zvalue']=mdoc_df.index.values
     return mdoc_df
 
-def read_ta(taSname,tilt_offset=0):
+def read_ta(taSname):
     if not path.exists(taSname):
             print("File not found:",taSname)
     if not path.exists(taSname+".bak"):
@@ -36,8 +42,8 @@ def read_ta(taSname,tilt_offset=0):
     else:
         print("taSolution Backup file already exists:",taSname+".bak")
     
-    df = pd.read_csv(taSname+".bak", index_col=0, skiprows=3, sep=None, skipinitialspace=True,header=None, names=ta_header)
-    df["deltilt"] = df["deltilt"]+tilt_offset
+    df = pd.read_csv(taSname+".bak", index_col=0, skiprows=3, sep=None, skipinitialspace=True,header=None, names=ta_header, engine='python')
+    df["deltilt"] = df["deltilt"]
 
     return df
 
@@ -67,13 +73,16 @@ def read_xml(xmlname):
     return df
 
 
-datapath = "2022_0226_RTSS/"
-framepath = datapath + "frames/"     
+print("hi")
+datapath = "./"
+framestr = "frames"
+framepath = datapath + framestr + "/"     
 imodpath = framepath + "imod/"
-mdocpath = datapath + "averages/"
+mdocpath = datapath + "PACE/Adjusted_mdoc/"
 tomolist = glob.glob(framepath + "*.tomostar")
-tilt_offset = 0
-tilt_invert = -1 #invert tilt angles in warp?
+tilt_offset = 0.0
+
+
 ta_header = ["view","rotation","tilt","deltilt","mag","dmag","skew","mean resid"]
 
 for tomostarname in tomolist:
@@ -83,23 +92,24 @@ for tomostarname in tomolist:
     mdocname = mdocpath + tomoname + ".mdoc"
     xmlname = framepath + tomoname + ".xml"
     if path.exists(taSname) and path.exists(tomostarname): 
-        ta_df = read_ta(taSname,tilt_offset)
+        ta_df = read_ta(taSname)
         mdoc_df = read_mdoc(mdocname)
         tomostar_df = read_tomostar(tomostarname)
         newtomostar_df = pd.DataFrame(None, columns = tomostar_df.columns)
 
         new_ind = 0
         for view in ta_df.index:
-            if view > 10 and view < 50: #removing views for all tilt series
-                new_ind = new_ind + 1
-                mdocrow = mdoc_df.loc[mdoc_df['Zvalue'] == str(view - 1)]
-                imagename =  mdocrow['SubFramePath'].values[0][mdocrow['SubFramePath'].values[0].rfind('frames\\'):][7:]
-                #print(imagename)
-                tomostarrow = tomostar_df.loc[tomostar_df['wrpMovieName']==imagename]
-                if tomostarrow.index.values.size == 1:
-                    tomostarrow.loc[tomostarrow.index.values[0],'wrpAngleTilt'] = tilt_invert * (float(mdocrow['TiltAngle'].values[0]) + ta_df.loc[view]['deltilt'])
-                    tomostarrow.loc[tomostarrow.index.values[0],'wrpDose'] =  float(mdocrow['PriorRecordDose'].values[0]) + float(mdocrow['ExposureDose'].values[0])
-                    newtomostar_df.loc[new_ind]=tomostarrow.loc[tomostarrow.index[0]]
+            new_ind = new_ind + 1
+            mdocrow = mdoc_df.loc[mdoc_df['Zvalue'] == view - 1]
+            framefindstr = framestr + '\\'
+            imagename =  mdocrow['SubFramePath'].values[0][mdocrow['SubFramePath'].values[0].rfind(framefindstr):]
+            imagename = imagename.replace(framefindstr,"")
+            #print(imagename)
+            tomostarrow = tomostar_df.loc[tomostar_df['wrpMovieName']==imagename]
+            if tomostarrow.index.values.size == 1:
+                tomostarrow.loc[tomostarrow.index.values[0],'wrpAngleTilt'] = tomostarrow['wrpAngleTilt'].values[0]  + tilt_offset #ta_df.loc[view]['tilt']
+                tomostarrow.loc[tomostarrow.index.values[0],'wrpDose'] =  mdoc_df['index'][view-1] * float(mdoc_df['ExposureDose'][view-1])
+                newtomostar_df.loc[new_ind]=tomostarrow.loc[tomostarrow.index[0]]
         starfile.write(newtomostar_df, tomostarname,overwrite=True)
     if path.exists(xmlname):
         os.rename(xmlname, xmlname+'.bak')
